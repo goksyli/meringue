@@ -3,4 +3,4 @@ all:
 
 
 test_util:
-	
+	make -C test/ $@

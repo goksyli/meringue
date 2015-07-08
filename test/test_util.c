@@ -3,7 +3,10 @@
 
 int main()
 {
-	simple_va_fun(100);
-	simple_va_fun(100,200);
+	pr_err("I am wrong\n");
+	pr_warning("I am warned\n");
+	pr_info("I am informed\n");
+
+	die_perror("I am dying\n");
 	return 0;
 }

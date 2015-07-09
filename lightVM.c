@@ -58,6 +58,31 @@ int check_caps(int fd_kvm)
 }
 
 
+void kvm_arch_init(int fd_vm)
+{
+	struct kvm_pit_config pit_config = { .flags = 0, };
+	int ret;
+
+	ret = ioctl(fd_vm,KVM_CREATE_PIT2,&pit_config);
+	if( ret < 0 )
+		die_perror("KVM_CREATE_PIT2 ioctl failed");
+	ret = ioctl(fd_vm,KVM_CREATE_IRQCHIP);
+	if( ret < 0 )
+		die_perror("KVM_CREATE_IRQCHIP ioctl failed");
+
+
+	ret = ioctl(fd_vm,KVM_SET_TSS_ADDR, TSS_ADDRESS);
+	if( ret < 0 )
+		die_perror("KVM_SET_TSS_ADDR ioctl failed");
+
+
+
+
+}
+
+
+
+
 
 int kvm_init(struct lightVM_t *pLightVM)
 {
@@ -80,27 +105,30 @@ int kvm_init(struct lightVM_t *pLightVM)
 		return -1;/*FIXME close /dev/kvm before return*/
 	}	
 
+
 	if( check_caps(fd_kvm)){
 		pr_err("A required KVM cap is not supported by OS");
 		return -1;
 	}
-	/*
-	Todo use inherent kvm for check
-	for security and robustness, we should add API version
-	and extension check 
 
-	moreover get available :
-	mmapsize
-	cpuid
-	msr
-	*/
-
-	/*todo add close on exec flag when opening*/
+	/*TODO add close on exec flag when opening*/
 	int fd_vm = pLightVM->fd_vm = ioctl(fd_kvm, KVM_CREATE_VM, 0);
 	if( fd_vm == -1 ){
 		printf("Error: Creating VM failed");
 		return -1;/*FIXME close /dev/kvm before return*/
 	}
+	/*
+	TODO
+
+	some arch specific init
+	
+	moreover get available :
+	mmapsize
+	cpuid
+	msr
+	*/
+	kvm_arch_init(fd_vm);
+
 	return 0;
 }
 

@@ -18,9 +18,14 @@ struct kvm_caps
 #define DEFINE_KVM_CAP_DUMMY	\
 	.name = "Dummy",		\
 	.code = 0				\
+/*add space on intel (3 pages)
+Maybe we can use 0xfffbd000 for 32 bits
 
-
-
+*/
+#if 0
+#define TSS_ADDRESS 0xffffffffffffd000
+#endif
+#define TSS_ADDRESS 0xfffbd000
 int kvm_init(struct lightVM_t *pLightVM);
 void kvm_exit(struct lightVM_t *pLightVM);
 #endif

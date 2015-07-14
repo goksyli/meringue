@@ -5,6 +5,8 @@
 #include <sys/ioctl.h>
 #include <unistd.h>
 #include <stdbool.h>
+#include <linux/types.h>
+#include <sys/mman.h>
 #include "lightVM.h"
 #include "util.h"
 struct kvm_caps kvm_req_caps [] = {
@@ -33,6 +35,8 @@ struct kvm_caps kvm_req_caps [] = {
 
 	{ 0, 0 }
 };
+
+struct lightVM_t lightVM;
 
 bool cap_supported(int fd_kvm, int code)
 {
@@ -75,18 +79,93 @@ void kvm_arch_init(int fd_vm)
 	if( ret < 0 )
 		die_perror("KVM_SET_TSS_ADDR ioctl failed");
 
+}
 
+/* The KVM_RUN ioctl (cf.) communicates with userspace via a shared
+memory region.  This ioctl returns the size of that region. */
+int get_mmap_size(int fd_kvm)
+{
+	int ret;
+	ret = ioctl(fd_kvm,KVM_GET_VCPU_MMAP_SIZE,0);
+	if( ret < 0 )
+		die_perror("KVM_GET_VCPU_MMAP_SIZE failed");
+	return ret;
+}
 
+static __u64 host_ram_size(void)
+{
+	long page_size;
+	long nr_pages;
 
+	nr_pages = sysconf(_SC_PHYS_PAGES);
+	if( nr_pages < 0 ) {
+		pr_warning("sysconf(_SC_PHYS_PAGES) failed");
+		return 0;
+	}
+
+	page_size = sysconf(_SC_PAGE_SIZE);
+	if( page_size < 0 ){
+		pr_warning("sysconf(_SC_PAGE_SIZE) failed");
+		return 0;
+	}
+
+	return (nr_pages*page_size) >> MB_SHIFT;
+}
+
+#define RAM_SIZE_RATIO	0.8
+
+static __u64 get_ram_size(int nr_cpus)
+{
+	__u64 available;
+	__u64 ram_size;
+
+	ram_size = 64 * (nr_cpus + 3);
+
+	available = host_ram_size() * RAM_SIZE_RATIO;
+	if( !available )
+		available = MIN_RAM_SIZE_MB;
+	if( ram_size > available )
+		ram_size = available;
+
+	return ram_size;
 }
 
 
 
 
 
+int init_memory(int fd_vm)
+{
+	int ret;
+	__u64 size = get_ram_size(4);
+
+	lightVM.size = size;
+	void *addr = mmap(NULL, size, PROT_READ | PROT_WRITE,
+		MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+	lightVM.addr = addr;
+	struct kvm_userspace_memory_region region = {
+		.slot = 0,
+		.flags = 0,
+		.guest_phys_addr = 0,
+		.memory_size = size,
+		.userspace_addr = (__u64)addr
+	};
+	/* Don't use KVM_SET_MOMERY_REGION which has been removed */
+	ret = ioctl(fd_vm, KVM_SET_USER_MEMORY_REGION, &region);
+	if( ret < 0 )
+		return -errno;
+
+	return 0;
+}
+
+void kvm_delete_memory(void *start,__u64 size)
+{
+	munmap(start,size);
+}
 int kvm_init(struct lightVM_t *pLightVM)
 {
 	int ret;
+	int mmap_size;
 	/*
 	get kvm and vm file descriptors, 
 	put in the struct lightVM_T
@@ -111,6 +190,15 @@ int kvm_init(struct lightVM_t *pLightVM)
 		return -1;
 	}
 
+	/*
+	moreover get available :
+	mmapsize
+	cpuid
+	msr
+	*/
+	mmap_size = get_mmap_size(fd_kvm);
+
+
 	/*TODO add close on exec flag when opening*/
 	int fd_vm = pLightVM->fd_vm = ioctl(fd_kvm, KVM_CREATE_VM, 0);
 	if( fd_vm == -1 ){
@@ -121,13 +209,13 @@ int kvm_init(struct lightVM_t *pLightVM)
 	TODO
 
 	some arch specific init
+
+	refactor into files by devices 
 	
-	moreover get available :
-	mmapsize
-	cpuid
-	msr
 	*/
 	kvm_arch_init(fd_vm);
+
+	ret = init_memory(fd_vm);
 
 	return 0;
 }
@@ -135,27 +223,21 @@ int kvm_init(struct lightVM_t *pLightVM)
 void kvm_exit(struct lightVM_t *pLightVM)
 {
 	int fd_kvm = pLightVM->fd_kvm;
-	int fd_vm = pLightVM->fd_vm;	
+	int fd_vm = pLightVM->fd_vm;
+	__u64 size = pLightVM->size;
+	void* addr = pLightVM->addr;
+	kvm_delete_memory(addr,size);	
 	close(fd_vm);
 	close(fd_kvm);
 }
 
-#if 0
-int init_memory()
-{
-	void *addr = mmap(NULL, 10 * MB, PROT_READ | PROT_WRITE,
-		MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
 
-	struct kvm_userspace_memory_region region = {
 
-	};
-	
-}
-#endif
+
 
 int main(int argc, char *argv[])
 {
-	struct lightVM_t lightVM;
+	
 	int ret = kvm_init(&lightVM);
 	if( ret != 0 )
 		return -1;

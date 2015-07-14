@@ -1,9 +1,11 @@
 #ifndef LIGHTVM_H
 #define LIGHTVM_H
-typedef struct lightVM_t{
+struct lightVM_t{
 	int fd_kvm;
 	int fd_vm;
-}lightVM_t;
+	__u64 size;
+	void * addr;
+};
 
 struct kvm_caps 
 {
@@ -19,13 +21,26 @@ struct kvm_caps
 	.name = "Dummy",		\
 	.code = 0				\
 /*add space on intel (3 pages)
-Maybe we can use 0xfffbd000 for 32 bits
-
+the region must be within the first 4GB
+of the guest physical address
 */
 #if 0
 #define TSS_ADDRESS 0xffffffffffffd000
 #endif
+
 #define TSS_ADDRESS 0xfffbd000
+
+#define MB_SHIFT	(20)
+#define KB_SHIFT	(10)
+#define GB_SHIFT	(30)
+
+#define KVM_32BIT_MAX_MEM_SIZE	(1ULL << 32)
+#define KVM_32BIT_GAP_SIZE		(768 << 20)
+#define KVM_32BIT_GAP_START		(KVM_32BIT_MAX_MEM_SIZE - KVM_32BIT_GAP_SIZE)
+
+#define MIN_RAM_SIZE_MB			(64ULL)
+#define MIN_RAM_SIZE_BYTE		(MIN_RAM_SIZE_MB << MB_SHIFT)
+
 int kvm_init(struct lightVM_t *pLightVM);
 void kvm_exit(struct lightVM_t *pLightVM);
 #endif

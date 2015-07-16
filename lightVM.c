@@ -136,7 +136,14 @@ static __u64 get_ram_size(int nr_cpus)
 
 int init_memory(int fd_vm)
 {
+	/*
+	TODO now we have only one slots
+	in the future, we may have so many mem region(non-overlapped) 
+	that we need list to append them together
+	*/
 	int ret;
+	/* get_ram_size reture value in MBs */
+	/*TODO move size assignment to VM init function*/
 	__u64 size = get_ram_size(4);
 
 	lightVM.size = size;
@@ -147,7 +154,7 @@ int init_memory(int fd_vm)
 		.slot = 0,
 		.flags = 0,
 		.guest_phys_addr = 0,
-		.memory_size = size << MB_SHIFT,
+		.memory_size = size << MB_SHIFT,/* need to be in bytes*/
 		.userspace_addr = (__u64)addr
 	};
 	pr_info("addr is %llx and size is %lld",addr,size);
@@ -249,6 +256,14 @@ void kvm_exit(struct lightVM_t *pLightVM)
 
 struct vcpu * kvm_vcpu_init(unsigned id)
 {
+	/*
+	Step 1: create one vcpu using ioctl
+	Step 2: mmap run_state using fd_vcpu
+	Step 3: Set Register
+	Step 4: Load Lapic, Event(?)
+	Step 5: optional, load if available
+		MpState, Cpuid, Msrs, fpu, Xcrs, XSave
+	*/
 	struct vcpu * vcpu = calloc(1,sizeof(*vcpu));
 	if(!vcpu){
 		return NULL;
@@ -295,6 +310,8 @@ fail_calloc:
 }
 void kvm_vcpu_exit(struct vcpu * vcpu)
 {
+	munmap(vcpu->run_state,lightVM.mmap_size);
+	close(vcpu->fd_vcpu);
 	free(vcpu);
 }
 int kvm_vcpus_exit()
@@ -304,12 +321,13 @@ int kvm_vcpus_exit()
 	for( i = 0; i < 8; i++){
 		if( vcpus[i]->is_running){
 			/* if vcpu is running,stop it*/
+			/* Maybe use MpStateHalted to stop it, survey needed*/
 			pr_info("kill pthread of %d vcpu",i);
 		}
 		kvm_vcpu_exit(vcpus[i]);
 		pr_info("exit vcpu %d",i);
 	}
-	kvm_vcpu_exit(vcpus[8]);
+	free(vcpus[8]);
 
 	free(vcpus);
 	return 0;

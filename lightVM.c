@@ -37,7 +37,7 @@ struct kvm_caps kvm_req_caps [] = {
 };
 
 struct lightVM_t lightVM;
-
+struct vcpu ** vcpus =NULL;
 bool cap_supported(int fd_kvm, int code)
 {
 	int ret;
@@ -147,14 +147,16 @@ int init_memory(int fd_vm)
 		.slot = 0,
 		.flags = 0,
 		.guest_phys_addr = 0,
-		.memory_size = size,
+		.memory_size = size << MB_SHIFT,
 		.userspace_addr = (__u64)addr
 	};
+	pr_info("addr is %llx and size is %lld",addr,size);
 	/* Don't use KVM_SET_MOMERY_REGION which has been removed */
 	ret = ioctl(fd_vm, KVM_SET_USER_MEMORY_REGION, &region);
-	if( ret < 0 )
+	if( ret < 0 ){
+		die_perror("KVM_SET_USER_MEMORY_REGION ioctl failed");
 		return -errno;
-
+	}
 	return 0;
 }
 
@@ -173,21 +175,23 @@ int kvm_init(struct lightVM_t *pLightVM)
 	/*todo add close on exec flag when opening*/
 	int fd_kvm = pLightVM->fd_kvm = open("/dev/kvm", O_RDWR);
 	if( fd_kvm == -1 ){
-		printf("Error: Opening dev/kvm failed\n");
-		return -1;
+		pr_err("Open /dev/kvm failed");
+		ret = -errno;
+		goto failed;
 	}
 
 
 	ret = ioctl(fd_kvm, KVM_GET_API_VERSION,0);
 	if( ret != KVM_API_VERSION) /* exactly 12*/{
-		printf("Debug: KVM API Version is %d\n",ret);
-		return -1;/*FIXME close /dev/kvm before return*/
+		pr_err("KVM_API_VERSION ioctl wrong");
+		goto failed_kvm_fd;
 	}	
 
 
 	if( check_caps(fd_kvm)){
 		pr_err("A required KVM cap is not supported by OS");
-		return -1;
+		ret = -ENOSYS;
+		goto failed_kvm_fd;
 	}
 
 	/*
@@ -196,14 +200,15 @@ int kvm_init(struct lightVM_t *pLightVM)
 	cpuid
 	msr
 	*/
-	mmap_size = get_mmap_size(fd_kvm);
+	pLightVM->mmap_size = mmap_size = get_mmap_size(fd_kvm);
 
 
 	/*TODO add close on exec flag when opening*/
 	int fd_vm = pLightVM->fd_vm = ioctl(fd_kvm, KVM_CREATE_VM, 0);
 	if( fd_vm == -1 ){
-		printf("Error: Creating VM failed");
-		return -1;/*FIXME close /dev/kvm before return*/
+		pr_err("KVM_CREATE_VM ioctl failed");
+		ret = fd_vm;
+		goto failed_kvm_fd;
 	}
 	/*
 	TODO
@@ -216,8 +221,19 @@ int kvm_init(struct lightVM_t *pLightVM)
 	kvm_arch_init(fd_vm);
 
 	ret = init_memory(fd_vm);
+	if( ret ){
+		pr_err("Init memory wrong");
+		goto failed_vm_fd;
+	}
 
 	return 0;
+
+failed_vm_fd:
+	close(fd_vm);
+failed_kvm_fd:
+	close(fd_kvm);
+failed:
+	return ret;
 }
 
 void kvm_exit(struct lightVM_t *pLightVM)
@@ -231,6 +247,73 @@ void kvm_exit(struct lightVM_t *pLightVM)
 	close(fd_kvm);
 }
 
+struct vcpu * kvm_vcpu_init(unsigned id)
+{
+	struct vcpu * vcpu = calloc(1,sizeof(*vcpu));
+	if(!vcpu){
+		return NULL;
+	}
+
+	vcpu->id = id;
+
+	vcpu->fd_vcpu = ioctl(lightVM.fd_vm, KVM_CREATE_VCPU,id);
+	if( vcpu->fd_vcpu < 0 )
+		die_perror("KVM_CREATE_VCPU ioctl failed");
+	vcpu->run_state = mmap(NULL,lightVM.mmap_size,PROT_READ | PROT_WRITE, MAP_SHARED,
+		vcpu->fd_vcpu,0);
+
+	/* TODO maybe need to check coalesced_mmio */
+
+	/* TODO maybe set something about LAPIC*/
+	vcpu->is_running = false;
+	return vcpu;
+}
+
+int kvm_vcpus_init( )
+{
+	int i;
+	vcpus = calloc(8+1, sizeof(void*));
+	if( !vcpus ){
+		pr_warning("Couldn't allocate array for 8 CPUs");
+		goto fail_calloc;
+	}
+
+	for(i = 0; i < 8; i++){
+		vcpus[i] = kvm_vcpu_init(i);
+		if(!vcpus[i]){
+			pr_warning("Unable to initialize KVM VCPU");
+			goto fail_alloc;
+		}
+	}
+	return 0;
+fail_alloc:
+	for( i = 0; i < 8; i++)
+		free(vcpus[i]);
+	free(vcpus);
+fail_calloc:
+	return -ENOMEM;
+}
+void kvm_vcpu_exit(struct vcpu * vcpu)
+{
+	free(vcpu);
+}
+int kvm_vcpus_exit()
+{
+	int i, r;
+
+	for( i = 0; i < 8; i++){
+		if( vcpus[i]->is_running){
+			/* if vcpu is running,stop it*/
+			pr_info("kill pthread of %d vcpu",i);
+		}
+		kvm_vcpu_exit(vcpus[i]);
+		pr_info("exit vcpu %d",i);
+	}
+	kvm_vcpu_exit(vcpus[8]);
+
+	free(vcpus);
+	return 0;
+}
 
 
 
@@ -239,8 +322,24 @@ int main(int argc, char *argv[])
 {
 	
 	int ret = kvm_init(&lightVM);
-	if( ret != 0 )
-		return -1;
+	if( ret ){
+		pr_err("KVM Init failed");
+		goto err; 
+	}
+	pr_info("KVM_INIT complete");
+	ret = kvm_vcpus_init();
+	if( ret ){
+		pr_err("KVM VCPUS failed");
+		goto err_vm;
+	}
+	pr_info("KVM VCPU INIT complete");
+	kvm_vcpus_exit();
+	pr_info("KVM VCPU EXIT complete");
 	kvm_exit(&lightVM);
+	pr_info("KVM EXIT complete");
 	return 0;
+err_vm:
+	kvm_exit(&lightVM);
+err:
+	return -1;
 }

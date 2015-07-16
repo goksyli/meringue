@@ -1,10 +1,22 @@
 #ifndef LIGHTVM_H
 #define LIGHTVM_H
+#include <linux/kvm.h>
+#include <stdbool.h>
 struct lightVM_t{
 	int fd_kvm;
 	int fd_vm;
 	__u64 size;
 	void * addr;
+	int mmap_size;
+};
+
+struct vcpu {
+	unsigned id;
+	int fd_vcpu;
+	struct kvm_run * run_state;
+	struct kvm_regs regs;
+	struct kvm_sregs sregs;
+	bool is_running;
 };
 
 struct kvm_caps 

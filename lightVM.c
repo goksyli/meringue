@@ -38,13 +38,16 @@ struct kvm_caps kvm_req_caps [] = {
 
 struct lightVM_t lightVM;
 struct vcpu ** vcpus =NULL;
-bool cap_supported(int fd_kvm, int code)
+int cap_supported(int fd_kvm, int code)
 {
 	int ret;
 
 	ret = ioctl(fd_kvm, KVM_CHECK_EXTENSION, code);
-	if( ret < 0 )
-		return false;
+	/*FIXME 
+	KVM_CHECK_EXTENSION ioctl, return:
+	0 if unsupported;
+	1 (or some other positive integer) if supported
+	*/
 	return ret;
 }
 
@@ -254,6 +257,23 @@ void kvm_exit(struct lightVM_t *pLightVM)
 	close(fd_kvm);
 }
 
+static int vcpu_set_lapic(struct vcpu * vcpu)
+{
+	/*
+	struct local_apic lapic;
+	*/
+	struct kvm_lapic_state lapic;
+	if(ioctl(vcpu->fd_vcpu, KVM_GET_LAPIC, &lapic))
+		return -1;
+	/*
+	lapic.lvt_lint0.delivery_mode = APIC_MODE_EXTINT;
+	lapic.lvt_lint1.delivery_mode = APIC_MODE_NMI;
+	*/
+	return ioctl(vcpu->fd_vcpu, KVM_SET_LAPIC, &lapic);
+	/*above is more specifically setting of lapic,
+	but it's not needed now*/
+}
+
 struct vcpu * kvm_vcpu_init(unsigned id)
 {
 	/*
@@ -280,6 +300,10 @@ struct vcpu * kvm_vcpu_init(unsigned id)
 	/* TODO maybe need to check coalesced_mmio */
 
 	/* TODO maybe set something about LAPIC*/
+	if(vcpu_set_lapic(vcpu))
+		die_perror("KVM_SET_LAPIC failed");
+
+
 	vcpu->is_running = false;
 	return vcpu;
 }
@@ -287,13 +311,13 @@ struct vcpu * kvm_vcpu_init(unsigned id)
 int kvm_vcpus_init( )
 {
 	int i;
-	vcpus = calloc(8+1, sizeof(void*));
+	vcpus = calloc(NR_VCPUS+1, sizeof(void*));
 	if( !vcpus ){
 		pr_warning("Couldn't allocate array for 8 CPUs");
 		goto fail_calloc;
 	}
 
-	for(i = 0; i < 8; i++){
+	for(i = 0; i < NR_VCPUS; i++){
 		vcpus[i] = kvm_vcpu_init(i);
 		if(!vcpus[i]){
 			pr_warning("Unable to initialize KVM VCPU");
@@ -302,7 +326,7 @@ int kvm_vcpus_init( )
 	}
 	return 0;
 fail_alloc:
-	for( i = 0; i < 8; i++)
+	for( i = 0; i < NR_VCPUS; i++)
 		free(vcpus[i]);
 	free(vcpus);
 fail_calloc:
@@ -318,7 +342,7 @@ int kvm_vcpus_exit()
 {
 	int i, r;
 
-	for( i = 0; i < 8; i++){
+	for( i = 0; i < NR_VCPUS; i++){
 		if( vcpus[i]->is_running){
 			/* if vcpu is running,stop it*/
 			/* Maybe use MpStateHalted to stop it, survey needed*/
@@ -327,7 +351,7 @@ int kvm_vcpus_exit()
 		kvm_vcpu_exit(vcpus[i]);
 		pr_info("exit vcpu %d",i);
 	}
-	free(vcpus[8]);
+	free(vcpus[NR_VCPUS]);
 
 	free(vcpus);
 	return 0;

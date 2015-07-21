@@ -53,6 +53,10 @@ of the guest physical address
 #define MIN_RAM_SIZE_MB			(64ULL)
 #define MIN_RAM_SIZE_BYTE		(MIN_RAM_SIZE_MB << MB_SHIFT)
 
+
+#define NR_VCPUS 	8
+
+
 int kvm_init(struct lightVM_t *pLightVM);
 void kvm_exit(struct lightVM_t *pLightVM);
 #endif

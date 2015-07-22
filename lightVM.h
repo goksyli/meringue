@@ -2,6 +2,7 @@
 #define LIGHTVM_H
 #include <linux/kvm.h>
 #include <stdbool.h>
+#include <pthread.h>
 struct lightVM_t{
 	int fd_kvm;
 	int fd_vm;
@@ -13,6 +14,7 @@ struct lightVM_t{
 struct vcpu {
 	unsigned id;
 	int fd_vcpu;
+	pthread_t thread;
 	struct kvm_run * run_state;
 	struct kvm_regs regs;
 	struct kvm_sregs sregs;

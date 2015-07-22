@@ -7,6 +7,7 @@
 #include <stdbool.h>
 #include <linux/types.h>
 #include <sys/mman.h>
+#include <sys/prctl.h>
 #include "lightVM.h"
 #include "util.h"
 struct kvm_caps kvm_req_caps [] = {
@@ -34,6 +35,28 @@ struct kvm_caps kvm_req_caps [] = {
 	{ DEFINE_KVM_CAP(KVM_CAP_IRQ_INJECT_STATUS) },
 
 	{ 0, 0 }
+};
+
+#define DEFINE_EXIT_REASON(reason) [reason] = #reason
+const char *exit_reason[] = {
+	DEFINE_EXIT_REASON(KVM_EXIT_UNKNOWN),
+	DEFINE_EXIT_REASON(KVM_EXIT_EXCEPTION),
+	DEFINE_EXIT_REASON(KVM_EXIT_IO),
+	DEFINE_EXIT_REASON(KVM_EXIT_HYPERCALL),
+	DEFINE_EXIT_REASON(KVM_EXIT_DEBUG),
+	DEFINE_EXIT_REASON(KVM_EXIT_HLT),
+	DEFINE_EXIT_REASON(KVM_EXIT_MMIO),
+	DEFINE_EXIT_REASON(KVM_EXIT_IRQ_WINDOW_OPEN),
+	DEFINE_EXIT_REASON(KVM_EXIT_SHUTDOWN),
+	DEFINE_EXIT_REASON(KVM_EXIT_FAIL_ENTRY),
+	DEFINE_EXIT_REASON(KVM_EXIT_INTR),
+	DEFINE_EXIT_REASON(KVM_EXIT_SET_TPR),
+	DEFINE_EXIT_REASON(KVM_EXIT_TPR_ACCESS),
+	DEFINE_EXIT_REASON(KVM_EXIT_S390_SIEIC),
+	DEFINE_EXIT_REASON(KVM_EXIT_S390_RESET),
+	DEFINE_EXIT_REASON(KVM_EXIT_DCR),
+	DEFINE_EXIT_REASON(KVM_EXIT_NMI),
+	DEFINE_EXIT_REASON(KVM_EXIT_INTERNAL_ERROR),
 };
 
 struct lightVM_t lightVM;
@@ -357,6 +380,118 @@ int kvm_vcpus_exit()
 	return 0;
 }
 
+static inline void set_thread_name(const char *name)
+{
+	prctl(PR_SET_NAME, name);
+}
+
+
+static void vcpu_run(struct vcpu * vcpu)
+{
+	int ret;
+
+	vcpu->is_running = true;
+	ret = ioctl(vcpu->fd_vcpu, KVM_RUN);
+	if( ret < 0 && (errno != EINTR && errno != EAGAIN)){
+		vcpu->is_running = false;
+		die_perror("KVM_RUN failed");
+	}
+}
+
+int vcpu_start(struct vcpu * vcpu)
+{
+	int ret = 0;
+	while( vcpu->is_running ){
+
+
+		switch(vcpu->run_state->exit_reason){
+			case KVM_EXIT_MMIO: {
+				break;
+			}
+			case KVM_EXIT_IO: {
+				break;
+			}
+			case KVM_EXIT_INTERNAL_ERROR:{
+				break;
+			}
+			case KVM_EXIT_EXCEPTION:{
+				break;
+			}
+
+			case KVM_EXIT_DEBUG:
+				break;
+
+			case KVM_EXIT_INTR:
+				break;
+			/* kvm has exit reason for shutdown
+			but in system event there is also shutdown
+			TODO give a survey
+			*/
+			case KVM_EXIT_SYSTEM_EVENT:
+				break;
+			case KVM_EXIT_UNKNOWN:
+				break;
+			default:
+				break;
+		}
+	}
+	/*Debug information*/
+	fprintf(stderr, "Vcpu %u KVM exit reason: %u (\"%s\")\n",
+		vcpu->id,
+		vcpu->run_state->exit_reason,
+		exit_reason[vcpu->run_state->exit_reason]
+		);
+	if( vcpu->run_state->exit_reason == KVM_EXIT_UNKNOWN)
+		fprintf(stderr, "KVM exit code: 0x%llu\n",
+			(unsigned long long)vcpu->run_state->hw.hardware_exit_reason);
+	return ret;
+}
+
+
+
+static void * vcpu_thread(void *arg)
+{
+	char name[16];
+	int ret;
+	struct vcpu * vcpu = arg;
+	sprintf(name,"vcpu-%lu",vcpu->id);
+	set_thread_name(name);
+
+	if( vcpu_start(vcpu) )
+		goto panic_vcpu;
+	return (void*)(intptr_t) 0;
+panic_vcpu:
+	fprintf(stderr, "KVM exit reason: %u (\"%s\")\n",
+		vcpu->run_state->exit_reason,
+		exit_reason[vcpu->run_state->exit_reason]
+		);
+	if( vcpu->run_state->exit_reason == KVM_EXIT_UNKNOWN)
+		fprintf(stderr, "KVM exit code: 0x%llu\n",
+			(unsigned long long)vcpu->run_state->hw.hardware_exit_reason);
+
+	/*TODO
+	Show debug information
+	*/
+
+	return (void*)(intptr_t)1;
+}
+
+
+inline static int vcpus_run()
+{
+	int i;
+	void * ret = NULL;
+	for(i = 0 ; i < NR_VCPUS; i++){
+		if(pthread_create(&vcpus[i]->thread,
+			NULL, 
+			vcpu_thread,
+			vcpus[i])!= 0)
+			die("unable to create VCPU thread");
+	}
+	return pthread_join(vcpus[0]->thread,&ret);
+}
+
+
 
 
 
@@ -375,6 +510,13 @@ int main(int argc, char *argv[])
 		goto err_vm;
 	}
 	pr_info("KVM VCPU INIT complete");
+
+/*TODO
+load some binary or image,
+start some daemon or something
+*/
+	vcpus_run();
+
 	kvm_vcpus_exit();
 	pr_info("KVM VCPU EXIT complete");
 	kvm_exit(&lightVM);
